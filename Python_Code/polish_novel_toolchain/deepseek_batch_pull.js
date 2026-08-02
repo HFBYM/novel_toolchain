@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         DeepSeek 自动润色助手 v6.0（后台稳定检测+智能去重）
+// @name         DeepSeek 自动润色助手 v7.5（附件上传 + 回车发送）
 // @namespace    http://tampermonkey.net/
-// @version      6.0
-// @description  批量润色并自动下载；后台窗口仍可实时检测回复；自动跳过重复输入或重复下载内容
+// @version      7.5
+// @description  批量上传文件（附件形式）并润色，自动下载；后台实时检测回复；上传后等待1秒，使用回车键发送
 // @author       You
 // @match        https://chat.deepseek.com/*
 // @match        https://deepseek.com/*
@@ -14,6 +14,12 @@
 
     // ---------- 选择器 ----------
     const SELECTORS = {
+        fileInput: [
+            'input[type="file"]',
+            '.ds-file-input',
+            '[data-testid="file-input"]',
+            'input[accept*="image/*"], input[accept*=".pdf"], input[accept*=".txt"]'
+        ],
         textarea: [
             'textarea[placeholder*="消息"]',
             'textarea[placeholder*="输入"]',
@@ -39,11 +45,7 @@
 
     // 全局取消标志
     let cancelRequested = false;
-
-    // 上一次成功下载的内容（用于跨文件去重）
     let lastDownloadedContent = null;
-
-    // 下载去重缓存（文件名级别，10秒内不重复下载）
     const downloadCache = new Map();
     const CACHE_DURATION = 10000;
 
@@ -76,81 +78,67 @@
         return null;
     }
 
-    async function simulateUserInput(el, content) {
-        el.focus();
-        await delay(100);
-
-        // 先清空
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-            el.value = '';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-        } else if (el.isContentEditable) {
-            el.innerText = '';
-            el.dispatchEvent(new Event('input', { bubbles: true }));
+    function getFileInput() {
+        for (const sel of SELECTORS.fileInput) {
+            const el = document.querySelector(sel);
+            if (el) return el;
         }
-        await delay(50);
-
-        // 填入新内容
-        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, content);
-            await delay(100);
-            if (el.value.length < content.length) {
-                const pasteEvent = new ClipboardEvent('paste', {
-                    clipboardData: new DataTransfer(),
-                    bubbles: true,
-                    cancelable: true
-                });
-                Object.defineProperty(pasteEvent, 'clipboardData', {
-                    value: {
-                        getData: () => content,
-                        setData: () => { },
-                        types: ['text/plain']
-                    }
-                });
-                el.dispatchEvent(pasteEvent);
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
-        } else {
-            el.focus();
-            document.execCommand('selectAll', false, null);
-            document.execCommand('insertText', false, content);
-            if (el.innerText.trim().length < content.length) {
-                el.innerText = content;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                el.dispatchEvent(new CompositionEvent('compositionend', { data: content, bubbles: true }));
-            }
-            el.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
-            el.dispatchEvent(new KeyboardEvent('keyup', { key: ' ', bubbles: true }));
-        }
-        await delay(300);
+        const allInputs = document.querySelectorAll('input[type="file"]');
+        return allInputs.length ? allInputs[0] : null;
     }
 
-    function forceClickSendButton(btn) {
-        btn.removeAttribute('disabled');
-        btn.setAttribute('aria-disabled', 'false');
-        const clickEvent = new MouseEvent('click', { bubbles: true, cancelable: true });
-        btn.dispatchEvent(clickEvent);
-        try { btn.click(); } catch (e) { }
+    function setFileInput(file) {
+        const fileInput = getFileInput();
+        if (!fileInput) return false;
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInput.files = dataTransfer.files;
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
     }
 
-    async function tryActivateAndSend(inputEl, sendBtn) {
-        for (let i = 0; i < 5; i++) {
-            const disabled = sendBtn.disabled || sendBtn.getAttribute('aria-disabled') === 'true';
-            if (!disabled) {
-                sendBtn.click();
-                return;
-            }
-            inputEl.focus();
-            inputEl.dispatchEvent(new Event('input', { bubbles: true }));
-            inputEl.dispatchEvent(new Event('change', { bubbles: true }));
-            await delay(500);
-        }
-        forceClickSendButton(sendBtn);
+    // ---------- 回车发送函数 ----------
+    function sendWithEnter(textarea) {
+        textarea.focus();
+        // 触发 keydown 事件（Enter）
+        const keydownEvent = new KeyboardEvent('keydown', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+            composed: true
+        });
+        textarea.dispatchEvent(keydownEvent);
+
+        // 触发 keypress 事件（有些监听用 keypress）
+        const keypressEvent = new KeyboardEvent('keypress', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+            composed: true
+        });
+        textarea.dispatchEvent(keypressEvent);
+
+        // 触发 keyup 事件（有些监听在 keyup 时提交）
+        const keyupEvent = new KeyboardEvent('keyup', {
+            key: 'Enter',
+            code: 'Enter',
+            keyCode: 13,
+            which: 13,
+            bubbles: true,
+            cancelable: true,
+            composed: true
+        });
+        textarea.dispatchEvent(keyupEvent);
+
+        // 额外触发 input 和 change，确保状态更新
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
     }
 
     // ---------- 文本提取与思考过滤 ----------
@@ -242,11 +230,11 @@
         return false;
     }
 
-    // ---------- 后台稳定的回复完成检测（MutationObserver 版） ----------
+    // ---------- 回复完成检测 ----------
     function waitForReplyComplete(timeoutMs = 600000) {
         return new Promise(resolve => {
-            const INITIAL_DELAY = 25000;       // 发送后等待 25 秒再开始监听
-            const STABLE_DURATION = 7000;      // 内容稳定 7 秒视为完成
+            const INITIAL_DELAY = 25000;
+            const STABLE_DURATION = 7000;
             let lastChangeTime = 0;
             let stableCheckTimer = null;
             let observer = null;
@@ -275,7 +263,6 @@
             const startObserving = () => {
                 const container = document.querySelector('.ds-chat') || document.body;
                 if (!container) {
-                    // 降级为轮询
                     const fallbackTimer = setInterval(() => {
                         const reply = getLatestAssistantReply();
                         if (reply && lastChangeTime && Date.now() - lastChangeTime >= STABLE_DURATION) {
@@ -301,8 +288,7 @@
                 scheduleStableCheck();
             };
 
-            const timeoutId = setTimeout(() => finish(), timeoutMs);
-
+            setTimeout(() => finish(), timeoutMs);
             setTimeout(() => {
                 startObserving();
             }, INITIAL_DELAY);
@@ -358,15 +344,9 @@
         return getLatestAssistantReply();
     }
 
-    // ---------- 处理单个文件（含智能去重） ----------
-    /**
-     * @returns {true|false|'input_duplicate'|'prev_duplicate'}
-     *  - true: 成功下载
-     *  - false: 其他失败
-     *  - 'input_duplicate': 回复与当前输入相同（重试后仍相同）
-     *  - 'prev_duplicate': 回复与上一次下载内容相同
-     */
+    // ---------- 处理单个文件（附件上传 + 回车发送） ----------
     async function processOneFile(file, statusCallback) {
+        // 读取文件内容（用于去重）
         const reader = new FileReader();
         const readPromise = new Promise((resolve, reject) => {
             reader.onload = ev => resolve(ev.target.result);
@@ -381,24 +361,30 @@
             return false;
         }
 
-        statusCallback(`正在填入 ${file.name} ...`);
+        // 上传附件
+        statusCallback(`正在上传 ${file.name} ...`);
+        const uploaded = setFileInput(file);
+        if (!uploaded) {
+            statusCallback(`❌ 未找到文件上传控件`);
+            return false;
+        }
+
+        // 等待 2 秒让 DeepSeek 处理上传
+        await delay(2000);
+
+        // ---------- 获取输入框（用于发送） ----------
+        statusCallback(`查找输入框...`);
         const textarea = await findElementAsync(SELECTORS.textarea);
         if (!textarea) {
             statusCallback(`❌ 未找到输入框`);
             return false;
         }
-        await simulateUserInput(textarea, content);
 
-        statusCallback(`查找发送按钮...`);
-        const sendBtn = await findElementAsync(SELECTORS.sendButton);
-        if (!sendBtn) {
-            statusCallback(`❌ 未找到发送按钮`);
-            return false;
-        }
-
+        // ---------- 使用回车键发送 ----------
         statusCallback(`发送 ${file.name} ...`);
-        await tryActivateAndSend(textarea, sendBtn);
+        sendWithEnter(textarea);
 
+        // 等待回复
         statusCallback(`等待25秒后开始检测回复...`);
         await waitForReplyComplete();
 
@@ -412,16 +398,13 @@
         const normalizedInput = content.trim();
         const normalizedReply = reply ? reply.trim() : '';
 
-        // 1. 检查是否与输入完全相同
         if (reply && normalizedReply === normalizedInput) {
             statusCallback(`⚠️ 回复与输入相同，等待20秒后重试...`);
             await delay(20000);
-
             if (cancelRequested) {
                 statusCallback(`⏹ 已取消`);
                 return false;
             }
-
             reply = getLatestAssistantReply();
             const secondReply = reply ? reply.trim() : '';
             if (!reply || secondReply === normalizedInput) {
@@ -430,7 +413,6 @@
             }
         }
 
-        // 2. 检查是否与上一次下载内容重复（只比较前1000字符）
         if (reply && lastDownloadedContent) {
             const cmpLength = 1000;
             const replyPrefix = normalizedReply.substring(0, cmpLength);
@@ -441,13 +423,11 @@
             }
         }
 
-        // 3. 正常下载
         if (reply) {
             statusCallback(`正在保存 ${file.name} ...`);
             const baseName = file.name.replace(/\.[^.]+$/, '');
             const outputName = baseName + '_polish.txt';
             downloadFile(outputName, reply, (msg) => statusCallback(msg));
-            // 更新上一次下载内容（保存前1000字符用于下次比较）
             lastDownloadedContent = normalizedReply;
             return true;
         } else {
@@ -474,7 +454,7 @@
         const sorted = naturalSort(Array.from(files));
         const total = sorted.length;
         let completed = 0;
-        lastDownloadedContent = null; // 重置跨文件记忆
+        lastDownloadedContent = null;
 
         for (let i = 0; i < total; i++) {
             if (cancelRequested) {
@@ -489,12 +469,8 @@
 
             const result = await processOneFile(file, progressCallback);
 
-            if (result === 'input_duplicate') {
-                statusCallback(`🛑 因回复与输入完全相同，终止全部任务 (已完成 ${completed}/${total})`);
-                return;
-            }
-            if (result === 'prev_duplicate') {
-                statusCallback(`🛑 因回复与上一次下载内容重复，终止全部任务 (已完成 ${completed}/${total})`);
+            if (result === 'input_duplicate' || result === 'prev_duplicate') {
+                statusCallback(`🛑 因重复内容终止任务 (已完成 ${completed}/${total})`);
                 return;
             }
 
@@ -502,10 +478,8 @@
                 completed++;
             } else {
                 completed++;
-                // 即使下载失败也计数，避免卡死
             }
 
-            // 如果不是最后一个文件且未被取消，等待随机5~10秒
             if (i < total - 1 && !cancelRequested) {
                 const waitSeconds = Math.floor(Math.random() * 6) + 5;
                 statusCallback(`[${completed}/${total}] ⏳ 等待 ${waitSeconds} 秒后继续...`);
@@ -521,7 +495,7 @@
     // ---------- UI 创建 ----------
     function createUI() {
         const container = document.createElement('div');
-        container.id = 'ds-auto-helper-v6';
+        container.id = 'ds-auto-helper-v7';
         container.style.cssText = `
             position: fixed;
             bottom: 100px;
@@ -555,7 +529,7 @@
         container.appendChild(dragHandle);
 
         const mainBtn = document.createElement('button');
-        mainBtn.textContent = '📂 批量导入并润色';
+        mainBtn.textContent = '📂 批量上传并润色';
         mainBtn.style.cssText = `
             padding: 10px 16px;
             background: #4CAF50;
@@ -656,7 +630,7 @@
             statusText.textContent = msg;
             if (msg.includes('❌') || msg.includes('✅ 全部完成') || msg.includes('⏹') || msg.includes('🛑')) {
                 mainBtn.disabled = false;
-                mainBtn.textContent = '📂 批量导入并润色';
+                mainBtn.textContent = '📂 批量上传并润色';
                 cancelBtn.disabled = true;
             } else {
                 mainBtn.disabled = true;

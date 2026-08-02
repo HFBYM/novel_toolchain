@@ -43,19 +43,47 @@ def get_sorted_files(directory):
     return [f[1] for f in valid_files], missing_nums
 
 def process_text(text, enable_newline):
-    """处理文本：标点引号换行 & 连续对话引号换行"""
+    """
+    处理文本：标点引号换行 & 连续对话引号换行（优化版）
+    重点解决 “你好。”“你好。” 中间插入换行，且不重复添加空行。
+    """
     if not enable_newline:
         return text
-    
-    # 循环多次确保嵌套或连续的情况被彻底处理
-    for _ in range(5):
-        # 规则1：完整句子(。？！)后的右引号(”或')后面如果没有换行，则添加换行
-        text = re.sub(r'([。？！]”)(?!\n)', r'\1\n', text)
-        text = re.sub(r"([。？！]')(?!\n)", r"\1\n", text)
-        
-        # 规则2：中文右引号和左引号之间插入换行 (处理连续对话)
-        text = re.sub(r'(”)\s*(“)', r'\1\n\2', text)
-                
+
+    # 定义右引号（中文右引号 ” 和英文单引号 ' ）、左引号（中文左引号 “）
+    # 注意：此处仅处理中文引号，可根据需要扩展英文双引号
+    right_quote = '”'   # 中文右引号
+    left_quote = '“'    # 中文左引号
+
+    # 规则①：句号/问号/感叹号 + 右引号 后插入换行（如果后面不是空白+换行）
+    # 允许右引号后跟着空格或制表符，但不会跨换行匹配
+    # 使用负向前瞻确保不重复添加
+    text = re.sub(
+        rf'([。？！]{re.escape(right_quote)})(?![ \t]*\n)',
+        r'\1\n',
+        text
+    )
+
+    # 规则②：右引号 与 左引号 之间（允许空格/制表符，不含换行）插入换行
+    # 使用 [ \t]* 替代 \s*，避免匹配到已有的换行符，防止重复
+    text = re.sub(
+        rf'({re.escape(right_quote)})[ \t]*({re.escape(left_quote)})(?![ \t]*\n)',
+        r'\1\n\2',
+        text
+    )
+
+    # 再执行一轮，处理嵌套或连续出现的引号对（最多两轮足够，避免过度循环）
+    text = re.sub(
+        rf'([。？！]{re.escape(right_quote)})(?![ \t]*\n)',
+        r'\1\n',
+        text
+    )
+    text = re.sub(
+        rf'({re.escape(right_quote)})[ \t]*({re.escape(left_quote)})(?![ \t]*\n)',
+        r'\1\n\2',
+        text
+    )
+
     return text
 
 def detect_encoding(filepath):
@@ -122,23 +150,18 @@ def main():
         print("=" * 60)
         
         n = len(file_stats)
-        # print(f"• 成功合并文件数: {n - len(error_files)} / {n}")
         print(f"• 总字符数: {total_chars:,}")
         
         if n > 4:
-            # 按字符数从小到大排序
             sorted_stats = sorted(file_stats, key=lambda x: x['chars'])
-            # 去掉两个最少和两个最多
             trimmed_stats = sorted_stats[2:-2]
             trimmed_total = sum(item['chars'] for item in trimmed_stats)
             avg_chars = trimmed_total / len(trimmed_stats)
             print(f"• 剔除极值(去2最高/2最低)后平均字符数: {avg_chars:,.0f}")
         else:
-            # 文件太少，直接计算全部平均
             avg_chars = sum(item['chars'] for item in file_stats) / n
             print(f"• 平均字符数 (文件数≤4，未剔除极值): {avg_chars:,.0f}")
         
-        # 查找偏离平均数超过阈值的文件
         lower_bound = avg_chars * (1 - DEVIATION_THRESHOLD)
         upper_bound = avg_chars * (1 + DEVIATION_THRESHOLD)
         
@@ -157,7 +180,6 @@ def main():
             print("-" * 65)
             print(f"{'文件名':<45} | {'字符数':<10} | {'偏离度'}")
             print("-" * 65)
-            # 按偏离度绝对值从大到小排序
             outliers.sort(key=lambda x: abs(x['deviation']), reverse=True)
             for out in outliers:
                 sign = "+" if out['deviation'] > 0 else ""

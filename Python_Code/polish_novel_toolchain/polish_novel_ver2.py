@@ -16,8 +16,7 @@ OLLAMA_URL = "http://localhost:11434/api/chat"
 
 BASE_DIR = Path("./Python_Code")
 NOVEL_PATH = BASE_DIR / "novel" / "for_polish" / "novel.txt"
-RULES_DIR = BASE_DIR / "polish_novel_toolchain"
-RULES_PATH = RULES_DIR / "polish_rules.txt"
+RULES_PATH = BASE_DIR / "novel" / "for_polish" /"末日重启" / "polish_rules.txt"
 PROGRESS_FILE = BASE_DIR / "novel" / "polished" / f"{NOVEL_PATH.stem}_polish_progress.json"
 REQUEST_TIMEOUT = 600
 MAX_RETRIES = 3
